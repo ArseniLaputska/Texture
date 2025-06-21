@@ -1320,7 +1320,7 @@ NSString * const ASRenderingEngineDidDisplayNodesScheduledBeforeTimestamp = @"AS
 
 // Track that a node will be displayed as part of the current node hierarchy.
 // The node sending the message should usually be passed as the parameter, similar to the delegation pattern.
-- (void)_pendingNodeWillDisplay:(ASDisplayNode *)node
+- (BOOL)_pendingNodeWillDisplay:(ASDisplayNode *)node
 {
   ASDisplayNodeAssertMainThread();
 
@@ -1328,13 +1328,14 @@ NSString * const ASRenderingEngineDidDisplayNodesScheduledBeforeTimestamp = @"AS
   if (!_pendingDisplayNodes) {
     _pendingDisplayNodes = [[ASWeakSet alloc] init];
   }
-
+  BOOL wasEmpty = [_pendingDisplayNodes isEmpty];
   [_pendingDisplayNodes addObject:node];
+  return wasEmpty;
 }
 
 // Notify that a node that was pending display finished
 // The node sending the message should usually be passed as the parameter, similar to the delegation pattern.
-- (void)_pendingNodeDidDisplay:(ASDisplayNode *)node
+- (BOOL)_pendingNodeDidDisplay:(ASDisplayNode *)node
 {
   ASDisplayNodeAssertMainThread();
 
@@ -1369,6 +1370,10 @@ NSString * const ASRenderingEngineDidDisplayNodesScheduledBeforeTimestamp = @"AS
       }
     }
     __instanceLock__.unlock();
+    
+    return YES;
+  } else {
+    return NO;
   }
 }
 
@@ -1770,13 +1775,29 @@ static void _recursivelySetDisplaySuspended(ASDisplayNode *node, CALayer *layer,
 - (void)subnodeDisplayWillStart:(ASDisplayNode *)subnode
 {
   // Subclass hook
-  [self _pendingNodeWillDisplay:subnode];
+  BOOL didAddFirstOne = [self _pendingNodeWillDisplay:subnode];
+  
+  if (didAddFirstOne && ASActivateExperimentalFeature(ASExperimentalHierarchyDisplayDidFinishIsRecursive)) {
+    __instanceLock__.lock();
+    ASDisplayNode *supernode = _supernode;
+    __instanceLock__.unlock();
+    
+    [supernode subnodeDisplayWillStart:self];
+  }
 }
 
 - (void)subnodeDisplayDidFinish:(ASDisplayNode *)subnode
 {
   // Subclass hook
-  [self _pendingNodeDidDisplay:subnode];
+  BOOL didRemoveLastOne = [self _pendingNodeDidDisplay:subnode];
+  
+  if (didRemoveLastOne && ASActivateExperimentalFeature(ASExperimentalHierarchyDisplayDidFinishIsRecursive)) {
+    __instanceLock__.lock();
+    ASDisplayNode *supernode = _supernode;
+    __instanceLock__.unlock();
+    
+    [supernode subnodeDisplayDidFinish:self];
+  }
 }
 
 #pragma mark <CALayerDelegate>
